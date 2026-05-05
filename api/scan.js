@@ -19,8 +19,15 @@ export default async function handler(req, res) {
   try {
     // ── STEP 1: Fetch SMH RSS feeds (no AI, no tokens) ───────────────────────
     const RSS_FEEDS = [
-      { url: 'https://www.smh.com.au/rss/feed.xml',     label: 'SMH' },
-      { url: 'https://www.smh.com.au/rss/business.xml', label: 'SMH Business' },
+      { url: 'https://www.smh.com.au/rss/feed.xml',                          label: 'SMH' },
+      { url: 'https://www.smh.com.au/rss/business.xml',                      label: 'SMH Business' },
+      { url: 'https://www.theage.com.au/rss/feed.xml',                       label: 'The Age' },
+      { url: 'https://www.theage.com.au/rss/business.xml',                   label: 'The Age Business' },
+      { url: 'https://www.abc.net.au/news/feed/2942460/rss.xml',             label: 'ABC News' },
+      { url: 'https://www.watoday.com.au/rss/feed.xml',                      label: 'WAtoday' },
+      { url: 'https://probononews.org/feed',                                  label: 'Pro Bono Australia' },
+      { url: 'https://news.google.com/rss/search?q=Australia+wealth+business+philanthropy&hl=en-AU&gl=AU&ceid=AU:en', label: 'Google News AU' },
+      { url: 'https://news.google.com/rss/search?q=Australia+donation+grant+children+health&hl=en-AU&gl=AU&ceid=AU:en', label: 'Google News Grants' },
     ];
 
     const allItems = [];
@@ -74,15 +81,25 @@ export default async function handler(req, res) {
       ? `Prioritise: ${learnedInclude.join(', ')}.` : '';
 
     // Send headlines as a compact list to Haiku
-    const headlineList = unique.slice(0, 40).map((a, i) =>
+    const headlineList = unique.slice(0, 60).map((a, i) =>
       `${i + 1}. [${a.source}] ${a.title}${a.desc ? ' — ' + a.desc.slice(0, 100) : ''}`
     ).join('\n');
 
     const classifyPrompt = `You are a prospect researcher for an Australian children's hospital non-profit. Today: ${today}. ${excludeNote} ${includeNote}
 
-Below are today's headlines from the Sydney Morning Herald. Identify ONLY the ones that are wealth events relevant to prospect research — i.e. they involve named individuals or organisations gaining wealth, making donations, receiving grants, completing acquisitions, property sales, executive appointments with equity, or sponsorships of health/children causes.
+Below are today's Australian news headlines. Be GENEROUS in identifying wealth events — include anything that could signal giving capacity or philanthropic intent in an individual or organisation. When in doubt, include it.
 
-Ignore sport, politics, weather, lifestyle, international news unrelated to Australian wealth.
+Include headlines about:
+- Any named Australian individual mentioned in a financial context (executive, entrepreneur, investor, property owner, donor, board member)
+- Any company deal, merger, acquisition, ASX listing or business sale
+- Any property transaction involving a named person or significant amount
+- Any donation, pledge, foundation, philanthropy or charity announcement
+- Any grant, funding round or government investment in health or children
+- Any executive appointment, resignation or board change at a significant company
+- Any Rich List mention, net worth update or wealth ranking
+- Any sponsorship or partnership involving health, children or community causes
+
+Only ignore: pure sport results, weather, crime unrelated to wealth, overseas news with no Australian angle.
 
 Headlines:
 ${headlineList}
@@ -120,7 +137,7 @@ Return [] if no headlines are relevant wealth events.`;
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 2000,
+        max_tokens: 3000,
         messages: [{ role: 'user', content: classifyPrompt }]
       })
     });
