@@ -85,12 +85,24 @@ export default async function handler(req, res) {
       });
     }
 
+    // Filter to last 48 hours only
+    const cutoff = new Date();
+    cutoff.setHours(cutoff.getHours() - 48);
+
+    const recent = allItems.filter(i => {
+      if (!i.pubDate) return true; // keep if no date (can't tell)
+      const pub = new Date(i.pubDate);
+      return !isNaN(pub) && pub >= cutoff;
+    });
+
     // Deduplicate by title
     const seen = new Set();
-    const unique = allItems.filter(i => {
+    const unique = recent.filter(i => {
       if (seen.has(i.title)) return false;
       seen.add(i.title); return true;
     });
+
+    debugInfo = (debugInfo||'') + ` After 48hr filter: ${unique.length} of ${allItems.length}.`;
 
     debugInfo = (debugInfo||'') + ` Total unique: ${unique.length}.`;
 
