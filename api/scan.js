@@ -100,8 +100,8 @@ export default async function handler(req, res) {
     const includeNote = learnedInclude && learnedInclude.length
       ? `Prioritise: ${learnedInclude.join(', ')}.` : '';
 
-    const headlineList = unique.slice(0, 60).map((a, i) =>
-      `${i + 1}. [${a.source}] ${a.title}${a.desc ? ' — ' + a.desc.slice(0, 80) : ''}`
+    const headlineList = unique.slice(0, 30).map((a, i) =>
+      `${i + 1}. [${a.source}] ${a.title}${a.desc ? ' — ' + a.desc.slice(0, 40) : ''}`
     ).join('\n');
 
     const classifyPrompt = `You are a prospect researcher for an Australian children's hospital non-profit. Today: ${today}. ${excludeNote} ${includeNote}
@@ -147,7 +147,7 @@ Return [] if nothing relevant found.`;
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 3000,
+        max_tokens: 4000,
         messages: [{ role: 'user', content: classifyPrompt }]
       })
     });
