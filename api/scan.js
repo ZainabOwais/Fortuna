@@ -87,7 +87,7 @@ export default async function handler(req, res) {
 
     // Filter to last 48 hours only
     const cutoff = new Date();
-    cutoff.setHours(cutoff.getHours() - 48);
+    cutoff.setHours(cutoff.getHours() - 24);
 
     const recent = allItems.filter(i => {
       if (!i.pubDate) return true; // keep if no date (can't tell)
@@ -112,13 +112,18 @@ export default async function handler(req, res) {
     const includeNote = learnedInclude && learnedInclude.length
       ? `Prioritise: ${learnedInclude.join(', ')}.` : '';
 
-    const headlineList = unique.slice(0, 30).map((a, i) =>
-      `${i + 1}. [${a.source}] ${a.title}${a.desc ? ' — ' + a.desc.slice(0, 40) : ''}`
-    ).join('\n');
+    const headlineList = unique.slice(0, 30).map((a, i) => {
+      const pubLabel = a.pubDate ? new Date(a.pubDate).toLocaleDateString('en-AU', { day:'numeric', month:'short', year:'numeric' }) : 'unknown date';
+      return `${i + 1}. [${a.source}] [${pubLabel}] ${a.title}${a.desc ? ' — ' + a.desc.slice(0, 40) : ''}`;
+    }).join('\n');
 
     const classifyPrompt = `You are a prospect researcher for an Australian children's hospital non-profit. Today: ${today}. ${excludeNote} ${includeNote}
 
-Below are Australian news headlines. Be GENEROUS — include any headline that signals wealth, giving capacity or philanthropic intent. When in doubt include it.
+Below are Australian news headlines. Each headline shows its publication date in brackets. Today is ${today}.
+
+STRICT RULE: Only include articles published in the last 7 days. If the date shown is from 2024 or earlier, skip it entirely — do not include it under any circumstances.
+
+Be GENEROUS with relevance — include any recent headline that signals wealth, giving capacity or philanthropic intent. When in doubt include it.
 
 Include: named Australians in financial contexts, company deals, property transactions, donations, grants, executive appointments, Rich List mentions, sponsorships of health or children causes.
 Exclude: pure sport, weather, crime, overseas news with no Australian wealth angle.
