@@ -14,22 +14,36 @@ export default async function handler(req, res) {
   });
 
   const excludeNote = learnedExclude && learnedExclude.length
-    ? `Exclude: ${learnedExclude.join(', ')}.` : '';
+    ? `Exclude these event types: ${learnedExclude.join(', ')}.` : '';
 
   const includeNote = learnedInclude && learnedInclude.length
-    ? `Prioritise: ${learnedInclude.join(', ')}.` : '';
+    ? `Prioritise these event types: ${learnedInclude.join(', ')}.` : '';
 
   let debugInfo = null;
 
   try {
 
-    // ── STEP 1: Search AFR only ───────────────────────────────────────────────
-    const searchPrompt = `Today is ${today}. Search site:afr.com for Australian wealth news from the last 48 hours. ${excludeNote} ${includeNote}
+    // ── STEP 1: Web search with plain queries ─────────────────────────────────
+    const searchPrompt = `Today is ${today}. ${excludeNote} ${includeNote}
 
-Find up to 5 stories about: named individuals gaining wealth (share surge, IPO, property sale, donation, appointment with equity), open grant rounds, or corporate health sponsorships.
+You are a prospect researcher for an Australian children's hospital non-profit.
 
-For each story found, write one line:
-ITEM: [person name or "none"] | [org] | [event type] | [state] | [date] | [one sentence what happened]`;
+Do THREE separate web searches:
+1. Search: "Australian Financial Review wealth donation philanthropy ${today}"
+2. Search: "AFR rich list property sale executive appointment Australia 2026"
+3. Search: "Australia grant children health funding 2026"
+
+From the results, find up to 5 real news stories from the last 48 hours about:
+- Named Australians who have gained significant wealth (share surge, IPO, business sale, property)
+- Named Australians making philanthropic donations
+- Senior executive appointments with equity or major pay
+- Open grant rounds relevant to children's hospitals
+- Corporate sponsorships of health or children's causes
+
+For each story write one line exactly like this:
+ITEM: [person full name or NONE] | [organisation] | [event type] | [Australian state] | [publish date] | [one sentence summary]
+
+Only include real stories you actually found in search results.`;
 
     const searchResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -57,25 +71,25 @@ ITEM: [person name or "none"] | [org] | [event type] | [state] | [date] | [one s
       .filter(Boolean)
       .join('\n');
 
-    debugInfo = 'Step 1 raw: ' + searchText.slice(0, 300);
+    debugInfo = 'Step 1: ' + searchText.slice(0, 400);
 
     if (!searchText || searchText.trim().length < 10) {
       return res.status(200).json({ events: [], scannedAt: new Date().toISOString(), debugInfo: 'Search returned nothing' });
     }
 
-    // ── STEP 2: Format as JSON using Haiku (no web search, cheap) ─────────────
-    const formatPrompt = `Convert this research summary into a JSON array. Today: ${today}.
+    // ── STEP 2: Format as JSON using Haiku ────────────────────────────────────
+    const formatPrompt = `Convert this research into a JSON array. Today: ${today}.
 
 ${searchText.slice(0, 1500)}
 
 Return ONLY a JSON array, no other text:
-[{"id":1,"type":"Individual Wealth","subtype":"Net Worth Milestone","title":"Short headline","source":"AFR","url":"","publishedDate":"3 May 2025","body":"Two plain English sentences.","individuals":["Full Name"],"orgs":["Org"],"state":"NSW","relevance":"Why this matters to children's hospital fundraising.","deadline":"","paywalled":true}]
+[{"id":1,"type":"Individual Wealth","subtype":"Net Worth Milestone","title":"Short headline","source":"AFR","url":"","publishedDate":"3 May 2026","body":"Two plain English sentences.","individuals":["Full Name"],"orgs":["Org"],"state":"NSW","relevance":"Why this matters to children's hospital fundraising.","deadline":"","paywalled":true}]
 
 Types: Individual Wealth, IPO, Acquisition, Donation, Grant, Real Estate, Appointment, Sponsorship
 Individual Wealth subtypes: Net Worth Milestone, Liquidity Event, Dividend Windfall, Philanthropic Signal, Inheritance, Corporate Gain, Property Gain
-subtype is "" for non-Individual-Wealth types.
-individuals must have real named people — empty [] only for Grant or Sponsorship.
-Return [] if no valid events.`;
+Use subtype "" for non-Individual-Wealth types.
+individuals must contain real named people — use empty [] only for Grant or Sponsorship types.
+Return [] if no valid events found.`;
 
     const formatResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -109,7 +123,7 @@ Return [] if no valid events.`;
       if (match) {
         events = JSON.parse(match[0]);
       } else {
-        debugInfo = 'No JSON found. Step2 raw: ' + formatText.slice(0, 200);
+        debugInfo = 'No JSON found in step 2. Raw: ' + formatText.slice(0, 200);
       }
       events = events.filter(e =>
         ['Grant', 'Sponsorship'].includes(e.type) ||
