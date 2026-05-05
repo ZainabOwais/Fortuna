@@ -85,16 +85,25 @@ export default async function handler(req, res) {
       });
     }
 
+    // Sort by date newest first
+    allItems.sort((a, b) => {
+      const da = a.pubDate ? new Date(a.pubDate) : new Date(0);
+      const db = b.pubDate ? new Date(b.pubDate) : new Date(0);
+      return db - da;
+    });
+
     // Deduplicate by title
     const seen = new Set();
-    const unique = allItems.filter(i => {
+    const deduped = allItems.filter(i => {
       if (seen.has(i.title)) return false;
       seen.add(i.title); return true;
     });
 
-    // Log a sample date so we can debug format
+    // Take the 40 most recent items regardless of date
+    const unique = deduped.slice(0, 40);
+
     const sampleDate = allItems[0]?.pubDate || 'no date found';
-    debugInfo = (debugInfo||'') + ` Total unique: ${unique.length}. Sample date: "${sampleDate}".`;
+    debugInfo = (debugInfo||'') + ` Total: ${allItems.length}, sending top 40 newest. Sample date: "${sampleDate}".`;
 
     debugInfo = (debugInfo||'') + ` Total unique: ${unique.length}.`;
 
