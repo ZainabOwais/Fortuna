@@ -4,19 +4,17 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Test multiple ABC News RSS URL formats
-    const ABC_URLS = [
-      'https://www.abc.net.au/news/feed/2942460/rss.xml',
-      'https://www.abc.net.au/news/feed/51120/rss.xml',
-      'https://www.abc.net.au/news/feed/45910/rss.xml',
-      'https://www.abc.net.au/news/business/feed/2942460/rss.xml',
+    const RSS_FEEDS = [
+      { url: 'https://www.abc.net.au/news/feed/45910/rss.xml', label: 'ABC News' },
+      { url: 'https://www.9news.com.au/rss',                   label: '9News' },
+      { url: 'https://www.sbs.com.au/news/feed',               label: 'SBS News' },
     ];
 
     const results = [];
 
-    for (const url of ABC_URLS) {
+    for (const feed of RSS_FEEDS) {
       try {
-        const r = await fetch(url, {
+        const r = await fetch(feed.url, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (compatible; Fortuna/1.0)',
             'Accept': 'application/rss+xml, application/xml, text/xml, */*'
@@ -25,18 +23,21 @@ export default async function handler(req, res) {
         const xml = r.ok ? await r.text() : '';
         const items = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
         const firstTitle = items[0]
-          ? (items[0].match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || items[0].match(/<title>(.*?)<\/title>/))?.[1]?.trim()
+          ? (items[0].match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || items[0].match(/<title>(.*?)<\/title>/))?.[1]?.trim() || 'no title'
           : 'no items';
-        results.push(`${url} → HTTP ${r.status}, ${items.length} items, first: "${firstTitle}"`);
+        const firstDate = items[0]
+          ? items[0].match(/<pubDate>(.*?)<\/pubDate>/)?.[1]?.trim() || 'no date'
+          : 'no items';
+        results.push(`${feed.label}: HTTP ${r.status}, ${items.length} items, first: "${firstTitle}" (${firstDate})`);
       } catch(e) {
-        results.push(`${url} → ERROR: ${e.message}`);
+        results.push(`${feed.label}: ERROR ${e.message}`);
       }
     }
 
     return res.status(200).json({
       events: [],
       scannedAt: new Date().toISOString(),
-      debugInfo: results.join(' | ')
+      debugInfo: results.join(' || ')
     });
 
   } catch (err) {
