@@ -56,6 +56,8 @@ Valid types: "Individual Wealth", "IPO", "Acquisition", "Donation", "Grant", "Re
 For non-Individual-Wealth types, "subtype" should be "".
 Return [] if nothing found.`;
 
+  let debugInfo = null;
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -88,13 +90,18 @@ Return [] if nothing found.`;
     try {
       const cleaned = fullText.replace(/```json|```/g, '').trim();
       const match = cleaned.match(/\[[\s\S]*\]/);
-      if (match) events = JSON.parse(match[0]);
+      if (match) {
+        events = JSON.parse(match[0]);
+      } else {
+        debugInfo = 'No JSON array found in response. Raw: ' + fullText.slice(0, 400);
+      }
       // Enforce: non-grant/sponsor events must have named individuals
       events = events.filter(e =>
         ['Grant', 'Sponsorship'].includes(e.type) ||
         (e.individuals && e.individuals.length > 0 && e.individuals[0] !== '')
       );
-    } catch (e) {
+    } catch (parseErr) {
+      debugInfo = 'JSON parse error: ' + parseErr.message + ' | Raw: ' + fullText.slice(0, 300);
       events = [];
     }
 
