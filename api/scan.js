@@ -15,7 +15,6 @@ export default async function handler(req, res) {
   let debugInfo = null;
 
   try {
-
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -30,11 +29,16 @@ export default async function handler(req, res) {
         messages: [
           {
             role: 'user',
-            content: `Search the web for "AFR news today ${today}" and list every article headline and summary you find. Return results as a JSON array like this:
+            content: `You are a research assistant. Search the web using these exact queries one at a time and report what you find:
 
-[{"title":"Article headline","source":"AFR","publishedDate":"${today}","body":"One sentence summary.","url":"article url if found or empty string"}]
+Query 1: "Australian Financial Review" business news ${today}
+Query 2: "Sydney Morning Herald" business news ${today}
+Query 3: Australia billionaire donation philanthropy May 2026
 
-Return ONLY the JSON array, nothing else.`
+For each article or story you find in the search results, output one line:
+HEADLINE: [headline] | SOURCE: [publication name] | DATE: [date] | SUMMARY: [one sentence]
+
+List every result you find. Do not explain or apologise — just list the headlines.`
           }
         ]
       })
@@ -51,36 +55,50 @@ Return ONLY the JSON array, nothing else.`
       .filter(Boolean)
       .join('\n');
 
-    debugInfo = 'Raw: ' + fullText.slice(0, 500);
+    debugInfo = fullText.slice(0, 800);
+
+    // Step 2 — Haiku formats whatever was found into event cards
+    const formatResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        messages: [{
+          role: 'user',
+          content: `Convert these news headlines into a JSON array. Include ALL stories listed — do not filter any out.
+
+${fullText.slice(0, 2000)}
+
+Return ONLY a JSON array:
+[{"id":1,"type":"News","subtype":"","title":"headline","source":"publication","url":"","publishedDate":"${today}","body":"one sentence summary","individuals":[],"orgs":[],"state":"National","relevance":"","deadline":"","paywalled":false}]
+
+Return [] only if there are truly no headlines above.`
+        }]
+      })
+    });
+
+    const formatData = await formatResp.json();
+    const formatText = formatData.content
+      .map(b => b.type === 'text' ? b.text : '')
+      .filter(Boolean)
+      .join('\n');
 
     let events = [];
     try {
-      const cleaned = fullText.replace(/```json|```/g, '').trim();
+      const cleaned = formatText.replace(/```json|```/g, '').trim();
       const match = cleaned.match(/\[[\s\S]*\]/);
       if (match) {
-        const articles = JSON.parse(match[0]);
-        // Map raw articles to Fortuna event format
-        events = articles.map((a, i) => ({
-          id: i + 1,
-          type: 'News',
-          subtype: '',
-          title: a.title || 'Untitled',
-          source: a.source || 'AFR',
-          url: a.url || '',
-          publishedDate: a.publishedDate || today,
-          body: a.body || '',
-          individuals: [],
-          orgs: [],
-          state: 'National',
-          relevance: '',
-          deadline: '',
-          paywalled: true
-        }));
+        events = JSON.parse(match[0]);
       } else {
-        debugInfo = 'No JSON array found. Raw: ' + fullText.slice(0, 400);
+        debugInfo += ' | Step2 no JSON: ' + formatText.slice(0, 200);
       }
     } catch (e) {
-      debugInfo = 'Parse error: ' + e.message + ' | Raw: ' + fullText.slice(0, 300);
+      debugInfo += ' | Parse error: ' + e.message;
     }
 
     return res.status(200).json({ events, scannedAt: new Date().toISOString(), debugInfo });
