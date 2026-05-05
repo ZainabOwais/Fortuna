@@ -12,94 +12,101 @@ export default async function handler(req, res) {
     day: 'numeric', month: 'long', year: 'numeric'
   });
 
+  const todayDate = new Date();
+  todayDate.setHours(0, 0, 0, 0);
+
   let debugInfo = null;
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 1500,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages: [
-          {
-            role: 'user',
-            content: `You are a research assistant. Search the web using these exact queries one at a time and report what you find:
+    // ── Fetch AFR RSS feeds ───────────────────────────────────────────────────
+    const RSS_FEEDS = [
+      { url: 'https://www.afr.com/rss', label: 'AFR' },
+      { url: 'https://www.afr.com/rss/companies', label: 'AFR Companies' },
+      { url: 'https://www.afr.com/rss/markets', label: 'AFR Markets' },
+      { url: 'https://www.afr.com/rss/wealth', label: 'AFR Wealth' },
+      { url: 'https://www.afr.com/rss/property', label: 'AFR Property' },
+    ];
 
-Query 1: "Australian Financial Review" business news ${today}
-Query 2: "Sydney Morning Herald" business news ${today}
-Query 3: Australia billionaire donation philanthropy May 2026
+    const allItems = [];
 
-For each article or story you find in the search results, output one line:
-HEADLINE: [headline] | SOURCE: [publication name] | DATE: [date] | SUMMARY: [one sentence]
+    for (const feed of RSS_FEEDS) {
+      try {
+        const rssResp = await fetch(feed.url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Fortuna/1.0)' }
+        });
+        if (!rssResp.ok) {
+          debugInfo = (debugInfo || '') + ` | ${feed.label} fetch failed: ${rssResp.status}`;
+          continue;
+        }
+        const xml = await rssResp.text();
 
-List every result you find. Do not explain or apologise — just list the headlines.`
-          }
-        ]
-      })
-    });
+        // Parse <item> blocks from RSS XML
+        const items = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+        for (const item of items) {
+          const title = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
+                         item.match(/<title>(.*?)<\/title>/))?.[1]?.trim() || '';
+          const link  = (item.match(/<link>(.*?)<\/link>/))?.[1]?.trim() || '';
+          const desc  = (item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) ||
+                         item.match(/<description>(.*?)<\/description>/))?.[1]
+                         ?.replace(/<[^>]+>/g, '')?.trim() || '';
+          const pubDate = (item.match(/<pubDate>(.*?)<\/pubDate>/))?.[1]?.trim() || '';
 
-    if (!resp.ok) {
-      const err = await resp.json();
-      return res.status(resp.status).json({ error: err.error?.message || 'API error' });
-    }
+          if (!title) continue;
 
-    const data = await resp.json();
-    const fullText = data.content
-      .map(b => b.type === 'text' ? b.text : '')
-      .filter(Boolean)
-      .join('\n');
+          // Only include today's articles
+          const pub = pubDate ? new Date(pubDate) : null;
+          if (pub && pub < todayDate) continue;
 
-    debugInfo = fullText.slice(0, 800);
-
-    // Step 2 — Haiku formats whatever was found into event cards
-    const formatResp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1500,
-        messages: [{
-          role: 'user',
-          content: `Convert these news headlines into a JSON array. Include ALL stories listed — do not filter any out.
-
-${fullText.slice(0, 2000)}
-
-Return ONLY a JSON array:
-[{"id":1,"type":"News","subtype":"","title":"headline","source":"publication","url":"","publishedDate":"${today}","body":"one sentence summary","individuals":[],"orgs":[],"state":"National","relevance":"","deadline":"","paywalled":false}]
-
-Return [] only if there are truly no headlines above.`
-        }]
-      })
-    });
-
-    const formatData = await formatResp.json();
-    const formatText = formatData.content
-      .map(b => b.type === 'text' ? b.text : '')
-      .filter(Boolean)
-      .join('\n');
-
-    let events = [];
-    try {
-      const cleaned = formatText.replace(/```json|```/g, '').trim();
-      const match = cleaned.match(/\[[\s\S]*\]/);
-      if (match) {
-        events = JSON.parse(match[0]);
-      } else {
-        debugInfo += ' | Step2 no JSON: ' + formatText.slice(0, 200);
+          allItems.push({
+            title,
+            link,
+            desc,
+            pubDate,
+            source: feed.label
+          });
+        }
+      } catch (feedErr) {
+        debugInfo = (debugInfo || '') + ` | ${feed.label} error: ${feedErr.message}`;
       }
-    } catch (e) {
-      debugInfo += ' | Parse error: ' + e.message;
     }
+
+    debugInfo = `Fetched ${allItems.length} items from AFR RSS feeds today. ` + (debugInfo || '');
+
+    if (!allItems.length) {
+      return res.status(200).json({
+        events: [],
+        scannedAt: new Date().toISOString(),
+        debugInfo: debugInfo + ' | No items found — RSS may be blocking or empty today.'
+      });
+    }
+
+    // Deduplicate by title
+    const seen = new Set();
+    const unique = allItems.filter(i => {
+      if (seen.has(i.title)) return false;
+      seen.add(i.title);
+      return true;
+    });
+
+    // Map to Fortuna event cards — just headlines for now
+    const events = unique.slice(0, 30).map((a, i) => ({
+      id: i + 1,
+      type: 'News',
+      subtype: '',
+      title: a.title,
+      source: a.source,
+      url: a.link,
+      publishedDate: a.pubDate
+        ? new Date(a.pubDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+        : today,
+      body: a.desc ? a.desc.slice(0, 200) : 'No description available.',
+      individuals: [],
+      orgs: [],
+      state: 'National',
+      relevance: '',
+      deadline: '',
+      paywalled: true
+    }));
 
     return res.status(200).json({ events, scannedAt: new Date().toISOString(), debugInfo });
 
