@@ -496,7 +496,8 @@ async function runScan(){
       document.getElementById('exportBtn').disabled=false;
       showToast('Scan complete — '+events.length+' events found');
     } else {
-      document.getElementById('content').innerHTML=`<div class="empty"><div class="empty-ico">◎</div><div class="empty-h">No events found</div><div class="empty-s">No wealth events matching your topics were published in the last 48 hours. Try again later or add more topics.</div></div>`;
+      const debugMsg = data.debugInfo ? `<div style="margin-top:10px;font-size:11px;background:#f5f5f5;padding:8px;border-radius:6px;text-align:left;max-width:400px;word-break:break-word;color:#555">Debug: ${data.debugInfo}</div>` : '';
+      document.getElementById('content').innerHTML=`<div class="empty"><div class="empty-ico">◎</div><div class="empty-h">No events found</div><div class="empty-s">No wealth events found in the last 48 hours. Try again later or add more topics.</div>${debugMsg}</div>`;
       showToast('Scan complete — no events found today');
     }
   } catch(err){
