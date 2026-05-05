@@ -3,11 +3,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'API key not configured on server.' });
-  }
-
   const today = new Date().toLocaleDateString('en-AU', {
     day: 'numeric', month: 'long', year: 'numeric'
   });
@@ -18,13 +13,9 @@ export default async function handler(req, res) {
   let debugInfo = null;
 
   try {
-    // ── Fetch AFR RSS feeds ───────────────────────────────────────────────────
     const RSS_FEEDS = [
-      { url: 'https://www.afr.com/rss', label: 'AFR' },
-      { url: 'https://www.afr.com/rss/companies', label: 'AFR Companies' },
-      { url: 'https://www.afr.com/rss/markets', label: 'AFR Markets' },
-      { url: 'https://www.afr.com/rss/wealth', label: 'AFR Wealth' },
-      { url: 'https://www.afr.com/rss/property', label: 'AFR Property' },
+      { url: 'https://www.smh.com.au/rss/feed.xml',         label: 'SMH' },
+      { url: 'https://www.smh.com.au/rss/business.xml',     label: 'SMH Business' },
     ];
 
     const allItems = [];
@@ -32,55 +23,47 @@ export default async function handler(req, res) {
     for (const feed of RSS_FEEDS) {
       try {
         const rssResp = await fetch(feed.url, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Fortuna/1.0)' }
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; Fortuna/1.0)',
+            'Accept': 'application/rss+xml, application/xml, text/xml, */*'
+          }
         });
+
         if (!rssResp.ok) {
-          debugInfo = (debugInfo || '') + ` | ${feed.label} fetch failed: ${rssResp.status}`;
+          debugInfo = (debugInfo||'') + `${feed.label}: HTTP ${rssResp.status}. `;
           continue;
         }
-        const xml = await rssResp.text();
 
-        // Parse <item> blocks from RSS XML
+        const xml = await rssResp.text();
+        debugInfo = (debugInfo||'') + `${feed.label}: got ${xml.length} chars. `;
+
         const items = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+        debugInfo += `${items.length} items. `;
+
         for (const item of items) {
           const title = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
                          item.match(/<title>(.*?)<\/title>/))?.[1]?.trim() || '';
-          const link  = (item.match(/<link>(.*?)<\/link>/))?.[1]?.trim() || '';
+          const link  = (item.match(/<link>(.*?)<\/link>/))?.[1]?.trim() ||
+                         item.match(/<guid[^>]*>(.*?)<\/guid>/)?.[1]?.trim() || '';
           const desc  = (item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) ||
                          item.match(/<description>(.*?)<\/description>/))?.[1]
                          ?.replace(/<[^>]+>/g, '')?.trim() || '';
-          const pubDate = (item.match(/<pubDate>(.*?)<\/pubDate>/))?.[1]?.trim() || '';
+          const pubDate = item.match(/<pubDate>(.*?)<\/pubDate>/)?.[1]?.trim() || '';
 
           if (!title) continue;
 
-          // Only include today's articles
-          const pub = pubDate ? new Date(pubDate) : null;
-          if (pub && pub < todayDate) continue;
-
-          allItems.push({
-            title,
-            link,
-            desc,
-            pubDate,
-            source: feed.label
-          });
+          allItems.push({ title, link, desc, pubDate, source: feed.label });
         }
-      } catch (feedErr) {
-        debugInfo = (debugInfo || '') + ` | ${feed.label} error: ${feedErr.message}`;
+      } catch (e) {
+        debugInfo = (debugInfo||'') + `${feed.label} error: ${e.message}. `;
       }
     }
 
-    debugInfo = `Fetched ${allItems.length} items from AFR RSS feeds today. ` + (debugInfo || '');
-
     if (!allItems.length) {
-      return res.status(200).json({
-        events: [],
-        scannedAt: new Date().toISOString(),
-        debugInfo: debugInfo + ' | No items found — RSS may be blocking or empty today.'
-      });
+      return res.status(200).json({ events: [], scannedAt: new Date().toISOString(), debugInfo: debugInfo || 'No items found' });
     }
 
-    // Deduplicate by title
+    // Deduplicate
     const seen = new Set();
     const unique = allItems.filter(i => {
       if (seen.has(i.title)) return false;
@@ -88,7 +71,7 @@ export default async function handler(req, res) {
       return true;
     });
 
-    // Map to Fortuna event cards — just headlines for now
+    // Map straight to cards — no AI, no filtering
     const events = unique.slice(0, 30).map((a, i) => ({
       id: i + 1,
       type: 'News',
@@ -99,13 +82,13 @@ export default async function handler(req, res) {
       publishedDate: a.pubDate
         ? new Date(a.pubDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
         : today,
-      body: a.desc ? a.desc.slice(0, 200) : 'No description available.',
+      body: a.desc ? a.desc.slice(0, 250) : '',
       individuals: [],
       orgs: [],
       state: 'National',
       relevance: '',
       deadline: '',
-      paywalled: true
+      paywalled: false
     }));
 
     return res.status(200).json({ events, scannedAt: new Date().toISOString(), debugInfo });
