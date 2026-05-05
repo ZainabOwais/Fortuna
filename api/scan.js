@@ -17,17 +17,24 @@ export default async function handler(req, res) {
   let debugInfo = null;
 
   try {
-    // ── STEP 1: Fetch SMH RSS feeds (no AI, no tokens) ───────────────────────
+    // ── Google News RSS — surfaces AFR, SMH, The Australian, ABC etc ──────────
     const RSS_FEEDS = [
-      { url: 'https://www.smh.com.au/rss/feed.xml',                          label: 'SMH' },
-      { url: 'https://www.smh.com.au/rss/business.xml',                      label: 'SMH Business' },
-      { url: 'https://www.theage.com.au/rss/feed.xml',                       label: 'The Age' },
-      { url: 'https://www.theage.com.au/rss/business.xml',                   label: 'The Age Business' },
-      { url: 'https://www.abc.net.au/news/feed/2942460/rss.xml',             label: 'ABC News' },
-      { url: 'https://www.watoday.com.au/rss/feed.xml',                      label: 'WAtoday' },
-      { url: 'https://probononews.org/feed',                                  label: 'Pro Bono Australia' },
-      { url: 'https://news.google.com/rss/search?q=Australia+wealth+business+philanthropy&hl=en-AU&gl=AU&ceid=AU:en', label: 'Google News AU' },
-      { url: 'https://news.google.com/rss/search?q=Australia+donation+grant+children+health&hl=en-AU&gl=AU&ceid=AU:en', label: 'Google News Grants' },
+      {
+        url: 'https://news.google.com/rss/search?q=Australia+wealth+billionaire+philanthropy+donation&hl=en-AU&gl=AU&ceid=AU:en',
+        label: 'Google: Wealth & Philanthropy'
+      },
+      {
+        url: 'https://news.google.com/rss/search?q=Australia+ASX+IPO+acquisition+merger+executive&hl=en-AU&gl=AU&ceid=AU:en',
+        label: 'Google: ASX & Deals'
+      },
+      {
+        url: 'https://news.google.com/rss/search?q=Australia+property+sale+real+estate+luxury&hl=en-AU&gl=AU&ceid=AU:en',
+        label: 'Google: Property'
+      },
+      {
+        url: 'https://news.google.com/rss/search?q=Australia+grant+children+health+foundation+nonprofit&hl=en-AU&gl=AU&ceid=AU:en',
+        label: 'Google: Grants & Health'
+      },
     ];
 
     const allItems = [];
@@ -40,10 +47,15 @@ export default async function handler(req, res) {
             'Accept': 'application/rss+xml, application/xml, text/xml, */*'
           }
         });
-        if (!rssResp.ok) continue;
+
+        if (!rssResp.ok) {
+          debugInfo = (debugInfo||'') + `${feed.label}: HTTP ${rssResp.status}. `;
+          continue;
+        }
 
         const xml = await rssResp.text();
         const items = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+        debugInfo = (debugInfo||'') + `${feed.label}: ${items.length} items. `;
 
         for (const item of items) {
           const title = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
@@ -54,79 +66,77 @@ export default async function handler(req, res) {
                          item.match(/<description>(.*?)<\/description>/))?.[1]
                          ?.replace(/<[^>]+>/g, '')?.trim() || '';
           const pubDate = item.match(/<pubDate>(.*?)<\/pubDate>/)?.[1]?.trim() || '';
+          // Google News embeds source name in <source> tag
+          const source  = item.match(/<source[^>]*>(.*?)<\/source>/)?.[1]?.trim() || feed.label;
 
           if (!title) continue;
-          allItems.push({ title, link, desc, pubDate, source: feed.label });
+          allItems.push({ title, link, desc, pubDate, source });
         }
-      } catch (e) { /* skip failed feed */ }
+      } catch (e) {
+        debugInfo = (debugInfo||'') + `${feed.label} error: ${e.message}. `;
+      }
     }
 
     if (!allItems.length) {
-      return res.status(200).json({ events: [], scannedAt: new Date().toISOString(), debugInfo: 'No RSS items fetched' });
+      return res.status(200).json({
+        events: [],
+        scannedAt: new Date().toISOString(),
+        debugInfo: (debugInfo||'') + ' No items found.'
+      });
     }
 
-    // Deduplicate
+    // Deduplicate by title
     const seen = new Set();
     const unique = allItems.filter(i => {
       if (seen.has(i.title)) return false;
       seen.add(i.title); return true;
     });
 
-    debugInfo = `Fetched ${unique.length} headlines from SMH RSS.`;
+    debugInfo = (debugInfo||'') + ` Total unique: ${unique.length}.`;
 
-    // ── STEP 2: AI classifies headlines as wealth events ──────────────────────
+    // ── AI classifies into Fortuna wealth event cards ─────────────────────────
     const excludeNote = learnedExclude && learnedExclude.length
       ? `Exclude types: ${learnedExclude.join(', ')}.` : '';
     const includeNote = learnedInclude && learnedInclude.length
       ? `Prioritise: ${learnedInclude.join(', ')}.` : '';
 
-    // Send headlines as a compact list to Haiku
     const headlineList = unique.slice(0, 60).map((a, i) =>
-      `${i + 1}. [${a.source}] ${a.title}${a.desc ? ' — ' + a.desc.slice(0, 100) : ''}`
+      `${i + 1}. [${a.source}] ${a.title}${a.desc ? ' — ' + a.desc.slice(0, 80) : ''}`
     ).join('\n');
 
     const classifyPrompt = `You are a prospect researcher for an Australian children's hospital non-profit. Today: ${today}. ${excludeNote} ${includeNote}
 
-Below are today's Australian news headlines. Be GENEROUS in identifying wealth events — include anything that could signal giving capacity or philanthropic intent in an individual or organisation. When in doubt, include it.
+Below are Australian news headlines. Be GENEROUS — include any headline that signals wealth, giving capacity or philanthropic intent. When in doubt include it.
 
-Include headlines about:
-- Any named Australian individual mentioned in a financial context (executive, entrepreneur, investor, property owner, donor, board member)
-- Any company deal, merger, acquisition, ASX listing or business sale
-- Any property transaction involving a named person or significant amount
-- Any donation, pledge, foundation, philanthropy or charity announcement
-- Any grant, funding round or government investment in health or children
-- Any executive appointment, resignation or board change at a significant company
-- Any Rich List mention, net worth update or wealth ranking
-- Any sponsorship or partnership involving health, children or community causes
-
-Only ignore: pure sport results, weather, crime unrelated to wealth, overseas news with no Australian angle.
+Include: named Australians in financial contexts, company deals, property transactions, donations, grants, executive appointments, Rich List mentions, sponsorships of health or children causes.
+Exclude: pure sport, weather, crime, overseas news with no Australian wealth angle.
 
 Headlines:
 ${headlineList}
 
-For each relevant wealth event, return a JSON object. Return ONLY a JSON array, no other text:
+Return ONLY a JSON array, no other text:
 [{
   "id": 1,
   "type": "Individual Wealth",
   "subtype": "Net Worth Milestone",
-  "title": "short clear headline",
-  "source": "SMH",
+  "title": "clear short headline",
+  "source": "publication name from brackets above",
   "url": "",
   "publishedDate": "${today}",
-  "body": "Two plain English sentences anyone can understand in 2 minutes.",
+  "body": "Two plain English sentences anyone can understand.",
   "individuals": ["Full Name"],
-  "orgs": ["Organisation Name"],
+  "orgs": ["Organisation"],
   "state": "NSW",
-  "relevance": "One sentence — why this matters to children's hospital fundraising.",
+  "relevance": "One sentence why this matters to children's hospital fundraising.",
   "deadline": "",
   "paywalled": false
 }]
 
-Valid types: Individual Wealth, IPO, Acquisition, Donation, Grant, Real Estate, Appointment, Sponsorship
+Types: Individual Wealth, IPO, Acquisition, Donation, Grant, Real Estate, Appointment, Sponsorship
 Individual Wealth subtypes: Net Worth Milestone, Liquidity Event, Dividend Windfall, Philanthropic Signal, Inheritance, Corporate Gain, Property Gain
 subtype is "" for all non-Individual-Wealth types.
 individuals must be real named people — empty [] only for Grant or Sponsorship.
-Return [] if no headlines are relevant wealth events.`;
+Return [] if nothing relevant found.`;
 
     const classifyResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -142,10 +152,9 @@ Return [] if no headlines are relevant wealth events.`;
       })
     });
 
+    // If AI fails fall back to raw headlines
     if (!classifyResp.ok) {
-      const err = await classifyResp.json();
-      // If AI fails, fall back to showing raw headlines
-      const rawEvents = unique.slice(0, 20).map((a, i) => ({
+      const rawEvents = unique.slice(0, 25).map((a, i) => ({
         id: i + 1, type: 'News', subtype: '',
         title: a.title, source: a.source, url: a.link,
         publishedDate: a.pubDate ? new Date(a.pubDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : today,
@@ -153,16 +162,14 @@ Return [] if no headlines are relevant wealth events.`;
         individuals: [], orgs: [], state: 'National',
         relevance: '', deadline: '', paywalled: false
       }));
-      return res.status(200).json({ events: rawEvents, scannedAt: new Date().toISOString(), debugInfo: 'AI classify failed — showing raw headlines. Error: ' + (err.error?.message || '') });
+      return res.status(200).json({ events: rawEvents, scannedAt: new Date().toISOString(), debugInfo: debugInfo + ' AI failed — showing raw.' });
     }
 
     let classifyData;
     try {
       classifyData = await classifyResp.json();
     } catch (e) {
-      const rawText = await classifyResp.text().catch(() => 'unreadable');
-      // Fall back to raw headlines if AI response is unparseable
-      const rawEvents = unique.slice(0, 20).map((a, i) => ({
+      const rawEvents = unique.slice(0, 25).map((a, i) => ({
         id: i + 1, type: 'News', subtype: '',
         title: a.title, source: a.source, url: a.link,
         publishedDate: a.pubDate ? new Date(a.pubDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : today,
@@ -170,23 +177,25 @@ Return [] if no headlines are relevant wealth events.`;
         individuals: [], orgs: [], state: 'National',
         relevance: '', deadline: '', paywalled: false
       }));
-      return res.status(200).json({ events: rawEvents, scannedAt: new Date().toISOString(), debugInfo: 'AI response not valid JSON — showing raw headlines. Raw: ' + rawText.slice(0, 200) });
+      return res.status(200).json({ events: rawEvents, scannedAt: new Date().toISOString(), debugInfo: debugInfo + ' AI JSON parse failed — showing raw.' });
     }
+
     const classifyText = classifyData.content
       .map(b => b.type === 'text' ? b.text : '')
       .filter(Boolean)
       .join('\n');
 
-    // ── STEP 3: Parse and enrich with original URLs ───────────────────────────
     let events = [];
     try {
       const cleaned = classifyText.replace(/```json|```/g, '').trim();
       const match = cleaned.match(/\[[\s\S]*\]/);
       if (match) {
         events = JSON.parse(match[0]);
-        // Enrich each event with the original article URL from RSS
+        // Enrich with original URLs from RSS
         events = events.map(e => {
-          const original = unique.find(a => a.title.toLowerCase().includes(e.title.toLowerCase().slice(0, 20)));
+          const original = unique.find(a =>
+            a.title.toLowerCase().includes(e.title.toLowerCase().slice(0, 20))
+          );
           return {
             ...e,
             url: original?.link || e.url || '',
@@ -196,8 +205,8 @@ Return [] if no headlines are relevant wealth events.`;
           };
         });
       } else {
-        debugInfo += ' | AI returned no JSON — showing raw headlines.';
-        events = unique.slice(0, 20).map((a, i) => ({
+        // Fall back to raw if no JSON found
+        events = unique.slice(0, 25).map((a, i) => ({
           id: i + 1, type: 'News', subtype: '',
           title: a.title, source: a.source, url: a.link,
           publishedDate: a.pubDate ? new Date(a.pubDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : today,
@@ -205,9 +214,10 @@ Return [] if no headlines are relevant wealth events.`;
           individuals: [], orgs: [], state: 'National',
           relevance: '', deadline: '', paywalled: false
         }));
+        debugInfo += ' AI returned no JSON — showing raw headlines.';
       }
     } catch (parseErr) {
-      debugInfo += ' | Parse error: ' + parseErr.message;
+      debugInfo += ' Parse error: ' + parseErr.message;
     }
 
     return res.status(200).json({ events, scannedAt: new Date().toISOString(), debugInfo });
